@@ -1,0 +1,199 @@
+## RNASeq_Tony_20190722
+## Align and variant calling
+##
+## Generate index
+star_dir <- "path to STAR indexed genome"
+refS <- "path to hg19/BSgenome.Hsapiens.UCSC.hg19.fa"
+gtf_file <- "path to TxDb.Hsapiens.UCSC.hg19.knownGene.gtf"
+#
+star_idx <- function(res_fold=star_dir,ref=refS,gtf=gtf_file,length=149){
+  staridx <- paste("STAR --runThreadN 10 --runMode genomeGenerate",
+                   "--genomeDir",res_fold,
+                   "--genomeFastaFiles",ref,
+                   "--sjdbGTFfile",gtf,
+                   "--sjdbOverhang",length,sep=" ")
+  system(staridx)
+}
+dir.create(star_dir)
+star_idx(res_fold = star_dir,ref=refS,gtf = gtf_file,length=149)
+##
+## loading environment
+base_dir <- "main directory"
+# raw_data <- file.path(base_dir,"rawData")
+temp_file1 <- "temp file for batchtools"
+#
+library(BiocParallel)
+library(batchtools)
+param <- BatchtoolsParam(workers=10000, cluster="slurm",template=temp_file1)
+register(param)
+#
+sys_file <- "files for environment setting, assign GATK, Piacrd, annovar path, and threat usage"
+sysPath <- read.csv(sys_file,header=TRUE,sep=",",stringsAsFactor=FALSE)
+picard_path <- sysPath$picard # path to picard.jar
+gatk_path <- sysPath$gatk # path to gatk
+annoV_path <- sysPath$annovar # path to annovar
+th <- sysPath$thread # assign threat usagee
+##
+## Sample sheet
+raw_data <- "path to fastq files"
+file_local <- dir(raw_data,full.names = TRUE)
+sample_id <- unique(gsub("(.*)_(.*)_(.*)_(.*)_(.*).fastq.gz","\\1",basename(file_local)))
+file_tab <- data.frame(sample=gsub("(.*)_(.*)_(.*)_(.*)_(.*).fastq.gz","\\1",basename(file_local)),
+                       file=file_local)
+sample_sheet <- data.frame(GenomicsID=sample_id)
+for(i in 1:length(sample_sheet$GenomicsID)){
+  samID <- sample_sheet$GenomicsID[i]
+  fq1 <- paste(file_tab$file[file_tab$sample==samID&grepl(file_tab$file,pattern="R1")],collapse=":")
+  fq2 <- paste(file_tab$file[file_tab$sample==samID&grepl(file_tab$file,pattern="R2")],collapse=":")
+  sample_sheet$FQLocation[i] <- paste(fq1,fq2,sep = ";")}
+sample_sheet$Group <- c(rep("C",times=6),rep("F",times=6),rep("X",times=6),rep("Z",times=6))
+sample_sheet$IFN <- rep(c("without","with"),times=12)
+sample_sheet$InputToUse <- "NA"
+sample_sheet$toMerge <- "NA"
+sample_sheet$BroadCall <- "NA"
+write.table(sample_sheet,"file path to sample sheet",sep=",",row.names = FALSE,quote = FALSE)
+#
+smSheet_file <- "file path to sample sheet"
+sample_sheet <- read.delim(smSheet_file,stringsAsFactors = FALSE,sep = ",")
+refS <- "path to BSgenome.Hsapiens.UCSC.hg19.fa"
+genome_ver <- "hg19"
+ref_db <- "path to annovar hg19"
+##
+## STAR two-step mapping
+star_align <- function(x,smSheet=NULL,res_fold=NULL,ref_dir=NULL,ref_fa=NULL,nTh=th,picard=picard_path){
+  sample_id <- smSheet$GenomicsID[x]
+  FQ1 <- paste(strsplit(unlist(strsplit(smSheet$FQLocation[x],split=";")),
+                        split=":")[[1]],collapse=",")
+  FQ2 <- paste(strsplit(unlist(strsplit(smSheet$FQLocation[x],split=";")),
+                        split=":")[[2]],collapse=",")
+  # FQ1 <- gsub("(.*):(.*)","\\1",smSheet$FQLocation[x])
+  # FQ2 <- gsub("(.*):(.*)","\\2",smSheet$FQLocation[x])
+  #
+  res_dir_1ps <- file.path(res_fold,paste0("STAR_",sample_id,"_1ps"))
+  res_dir_geno <- file.path(res_dir_1ps,paste0("STAR_",sample_id,"_geno"))
+  res_dir_2ps <- file.path(res_dir_1ps,paste0("STAR_",sample_id,"_2ps"))
+  dir.create(res_dir_1ps)
+  dir.create(res_dir_geno)
+  dir.create(res_dir_2ps)
+  #
+  # fq1 <- file.path(res_dir_1ps,paste0(sample_id,"_fq1.fastq"))
+  # fq2 <- file.path(res_dir_1ps,paste0(sample_id,"_fq2.fastq"))
+  #
+  setwd(res_dir_1ps)
+  # system(paste("zcat",FQ1,">",fq1,sep=" "))
+  # system(paste("zcat",FQ2,">",fq2,sep=" "))
+  system(paste("STAR --genomeDir",ref_dir,"--readFilesCommand zcat",
+               "--readFilesIn",FQ1,FQ2,
+               "--runThreadN",nTh,sep=" ")) # 1st-step align
+  system(paste("STAR --runMode genomeGenerate --genomeDir",res_dir_geno,
+               "--genomeFastaFiles",ref_fa,"--sjdbFileChrStartEnd SJ.out.tab",
+               "--sjdbOverhang 149","--runThreadN",nTh,sep = " "))
+  setwd(res_dir_2ps)
+  system(paste("STAR --genomeDir",res_dir_geno,"--readFilesCommand zcat",
+               "--readFilesIn",FQ1,FQ2,
+               "--runThreadN",nTh,sep=" "))
+  #
+  setwd(res_fold)
+  grp <- smSheet$Group[x]
+  in_sam <- file.path(res_fold,paste0("STAR_",sample_id,"_1ps"),
+                      paste0("STAR_",sample_id,"_2ps"),"Aligned.out.sam")
+  sort_bam <- file.path(res_fold,paste0(sample_id,"_sortted.bam"))
+  rmDup_bam <- file.path(res_fold,paste0(sample_id,"_rmDup.bam"))
+  rmDup_met <- file.path(res_fold,paste0(sample_id,"_rmDup_metrics.txt"))
+  system(paste(picard,"AddOrReplaceReadGroups I=",in_sam,"O=",sort_bam,
+               "SO=coordinate RGID=",sample_id,
+               "RGLB=RNASeq","RGPL=Illumina","RGPU=NovaSeq","RGSM=",sample_id,sep=" "))
+  system(paste(picard,"MarkDuplicates","I=",sort_bam,"O=",rmDup_bam,
+               "CREATE_INDEX=TRUE","VALIDATION_STRINGENCY=SILENT M=",rmDup_met,sep=" "))
+  #
+  unlink(file.path(res_fold,paste0("STAR_",sample_id,"_1ps")),recursive = TRUE)}
+#
+align_res <- file.path(base_dir,"align_results")
+dir.create(align_res)
+bplapply(1:length(sample_sheet$GenomicsID),star_align,
+         smSheet=sample_sheet,res_fold=align_res,nTh=th,picard=picard_path,
+         ref_dir="path to STAR indexed genome",
+         ref_fa="path to BSgenome.Hsapiens.UCSC.hg19.fa")
+##
+## SplitNCigar
+split_NCigar <- function(rmDup_bam,res_fold=NULL,ref_fa=NULL,gatk=gatk_path){
+  sample_id <- gsub("_rmDup.bam$","",basename(rmDup_bam))
+  splNC_bam <- file.path(res_fold,paste0(sample_id,"_splitNC.bam"))
+  system(paste(gatk,"SplitNCigarReads","-R",ref_fa,"-I",rmDup_bam,"-O",splNC_bam,sep=" "))}
+#
+rmDup_bam <- dir(file.path(base_dir,"align_results"),pattern="_rmDup.bam$",full.names = TRUE)
+bplapply(rmDup_bam,split_NCigar,
+         gatk=gatk_path,
+         res_fold=file.path(base_dir,"align_results"),
+         ref_fa="path to BSgenome.Hsapiens.UCSC.hg19.fa")
+##
+## Base recalibration
+base_recal <- function(splitNC_bam,ref_fa=NULL,snpDB=NULL,res_fold=NULL,gatk=gatk_path){
+  sample_id <- gsub("_splitNC.bam","",basename(splitNC_bam))
+  # splNC_bam <- file.path(res_fold,paste0(sample_id,"_splitNC.bam"))
+  recal_grp <- file.path(res_fold,paste0(sample_id,"_recal.grp"))
+  recal_bam <- file.path(res_fold,paste0(sample_id,"_recal.bam"))
+  #
+  system(paste(gatk,"BaseRecalibrator","-R",ref_fa,"-I",splitNC_bam,"-O",recal_grp,"--known-sites",snpDB,sep=" "))
+  system(paste(gatk,"ApplyBQSR","-R",ref_fa,"-I",splitNC_bam,"-O",recal_bam,"--bqsr-recal-file",recal_grp,sep=" "))}
+#
+splitNC_bam <- dir(file.path(base_dir,"align_results"),pattern = "_splitNC.bam",full.names = TRUE)
+bplapply(splitNC_bam,base_recal,
+         gatk=gatk_path,
+         res_fold=file.path(base_dir,"BAM"),
+         ref_fa="path to BSgenome.Hsapiens.UCSC.hg19.fa",
+         snpDB="path to snp138.vcf")
+##
+## Variant calling
+var_call <- function(rec_bam,ref_fa=NULL,snpDB=NULL,res_fold=NULL,gatk=gatk_path){
+  sample_id <- gsub("_recal.bam","",basename(rec_bam))
+  vcf_file <- file.path(res_fold,paste0(sample_id,"_varCall.vcf.gz"))
+  system(paste(gatk,"Mutect2","-R",ref_fa,
+               "-I",rec_bam,"-tumor",sample_id,"-O",vcf_file,sep=" "))}
+#
+dir.create(file.path(base_dir,"VCF"))
+#
+rec_bam <- dir(file.path(base_dir,"BAM"),pattern = "_recal.bam",full.names = TRUE)
+bplapply(rec_bam,var_call,gatk=gatk_path,
+         res_fold=file.path(base_dir,"VCF"),
+         ref_fa="path to BSgenome.Hsapiens.UCSC.hg19.fa",
+         snpDB="path to snp138.vcf")
+##
+## variant evaluation
+var_evl <- function(vcf_file,res_fold=NULL,gatk=gatk_path,ref_fa=NULL,snp_file=NULL){
+  sample_id <- gsub("_varCall.vcf.gz$","",basename(vcf_file))
+  vcf_filt <- file.path(res_fold,"SNV",paste0(sample_id,"_SNV.vcf.gz"))
+  # vcf_txt <- file.path(res_fold,"SNV",paste0(sample_id,"_SNV_count.txt"))
+  #
+  system(paste(gatk,"SelectVariants","-R",ref_fa,"-V",vcf_file,"-O",vcf_filt,
+               "--select-type-to-include","SNP",sep=" "))}
+#
+dir.create(file.path(base_dir,"SNV"))
+vcf_file <- dir(file.path(base_dir,"VCF"),pattern = "varCall.vcf.gz$",full.names = TRUE)
+bplapply(vcf_file,var_evl,res_fold=base_dir,gatk=gatk_path,
+         snp_file="path to snp138.vcf",
+         ref_fa="path to BSgenome.Hsapiens.UCSC.hg19.fa")
+##
+## merge
+vcf_filt <- dir(file.path(base_dir,"SNV"),pattern="_SNV.vcf.gz$",full.names=TRUE)
+system(paste("bcftools_1.9 merge -m snps",
+             "-o",file.path(base_dir,"Merged.vcf"),
+             paste(vcf_filt,collapse = " "),sep=" "))
+##
+## Annotation
+var_anno <- function(vcf_file,annoV=anno_path,gVer=genome_ver,db=ref_db,res_fold=NULL,gatk=gatk_path,ref=refS){
+  samID <- gsub(".vcf.gz$","",basename(vcf_file))
+  system(paste("perl",file.path(annoV,"table_annovar.pl"),
+               vcf_file,db,"-buildver",gVer,"-out",file.path(res_fold,samID),
+               "-remove","-protocol", "refGene,snp138", "-operation","g,f",
+               "-nastring",".","-vcfinput",sep=" "))
+  system(paste(gatk,"SelectVariants","-R",ref,
+               "-V",file.path(res_fold,paste0(samID,".",gVer,"_multianno.vcf")),
+               "-O",file.path(res_fold,paste0(samID,"_anno.vcf.gz")),
+               sep=" "))}
+dir.create(base_dir,"anno_VCF")
+bplapply(file.path(base_dir,"Merged.vcf"),var_anno,res_fold=file.path(base_dir,"anno_VCF"),
+         annoV=annoV_path,gVer=genome_ver,db=ref_db,gatk=gatk_path,ref=refS)
+##
+##
+## END
