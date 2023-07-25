@@ -1,0 +1,153 @@
+---
+title: "Extract_depth_alleleicCount_and_alleleicFrequency"
+author: "JD Luo"
+date: "2023-07-25, revised"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Description
+This step is aimed to generate matrix of total depth (DP), alleleic count (AC), and alleleic frequency (AF) of each variant in each sample. These matrix were stored in RData file. 
+
+## Read VCF file into R
+* Input: the *merged VCF file with annotation by annovar*.
+* Process:
+  + Load variants into R
+  + Extract general information into table
+* Output: a data frame containing general information of each variant.
+```{r readVCF,include=TRUE,eval=FALSE}
+# read annotated vcf file into R
+library(VariantAnnotation)
+vcf <- readVcf("path to the annotated vcf file")
+rd <- rowRanges(vcf)
+#
+# Exact information into table
+site_tab <- data.frame(variant=names(rd),stringsAsFactors = FALSE)
+site_tab$chr <- gsub("(.*):(.*)_(.*)/(.*)","\\1",site_tab$variant)
+site_tab$posi <- gsub("(.*):(.*)_(.*)/(.*)","\\2",site_tab$variant)
+site_tab$ref <- gsub("(.*):(.*)_(.*)/(.*)","\\3",site_tab$variant)
+site_tab$alt <- gsub("(.*):(.*)_(.*)/(.*)","\\4",site_tab$variant)
+site_tab$idx <- paste0(site_tab$chr,":",site_tab$posi)
+write.table(site_tab[,c(2,3,3)],
+            file="path to the extracted variant information",
+            row.names = FALSE,sep = "\t",col.names = FALSE,quote = FALSE)
+```
+
+## Calculate the counts for each variant
+* Input
+  + Re-calibrated BAM file for each sample
+  + Reference genome in fasta format
+* Process: Calculate the counts of each position for each sample by using *bam-readcount* [link](https://github.com/genome/bam-readcount).
+* Output: 
+  + A text file containing *counts of A/T/G/C in each position* for each sample
+  + An integrated data frame containing the total depth of each position in all samples
+
+```{r var_cal,include=TRUE,eval=FALSE}
+# Set environment for parallel processing
+library(BiocParallel)
+library(batchtools)
+temp_file1 <- "path to tmpl file"
+param <- BatchtoolsParam(workers=10000, cluster="slurm",template=temp_file1)
+register(param)
+#
+# Calculate counts with bam-readcount
+readCount <- function(bam_file,var_list=NULL,ref_seq=NULL,res_dir=count_dir){
+  samID <- gsub("_recal.bam","",basename(bam_file))
+  system(paste("bam-readcount",
+               "-f",ref_seq,"-l",var_list,bam_file,">",
+               file.path(res_dir,paste0(samID,"_rawCount.txt")),sep=" "))}
+#
+bam_file <- dir(file.path(base_dir,"BAM"),pattern="_recal.bam$",full.names = TRUE)
+bplapply(bam_file,readCount,res_dir="path to the result directory",
+         var_list="path to the text file generated in the previous step",
+         ref_seq="path to reference genome in fasta format")
+#
+# Extract total raw counts of each position
+count_file <- dir("path to the result directory",pattern="_rawCount.txt",full.names = TRUE)
+countProc <- function(count_file,res_dir=NULL,site=site_tab){
+  samID <- gsub("_rawCount.txt","",basename(count_file))
+  count_tab <- read.delim(count_file,header = FALSE,stringsAsFactors = FALSE)
+  count_dat <- data.frame(idx=paste0(count_tab$V1,":",count_tab$V2),
+                          DP=as.integer(count_tab$V4),
+                          stringsAsFactors = FALSE)
+  count_dat$A <- as.integer(unlist(sapply(strsplit(count_tab$V6,split = ":"),"[",2)))
+  count_dat$T <- as.integer(unlist(sapply(strsplit(count_tab$V7,split = ":"),"[",2)))
+  count_dat$G <- as.integer(unlist(sapply(strsplit(count_tab$V8,split = ":"),"[",2)))
+  count_dat$C <- as.integer(unlist(sapply(strsplit(count_tab$V9,split = ":"),"[",2)))
+  count_mg <- merge(site,count_dat,by='idx',all.x=TRUE)
+  count_mgA <- count_mg[count_mg$alt=="A",]
+  count_mgA$AD <- count_mgA$A
+  count_mgA$AF <- count_mgA$AD/count_mgA$DP
+  count_mgT <- count_mg[count_mg$alt=="T",]
+  count_mgT$AD <- count_mgT$T
+  count_mgT$AF <- count_mgT$AD/count_mgT$DP
+  count_mgG <- count_mg[count_mg$alt=="G",]
+  count_mgG$AD <- count_mgG$A
+  count_mgG$AF <- count_mgG$AD/count_mgG$DP
+  count_mgC <- count_mg[count_mg$alt=="C",]
+  count_mgC$AD <- count_mgC$C
+  count_mgC$AF <- count_mgC$AD/count_mgC$DP
+  count_mg <- rbind(count_mgA,count_mgT,count_mgG,count_mgC)
+  count_mg <- dplyr::select(count_mg,variant,DP,AD,AF)
+  names(count_mg) <- c("variant",paste0("DP_",samID),paste0("AD_",samID),paste0("AF_",samID))
+  count_mg[is.na(count_mg$DP),-1] <- rep(0,3)
+  write.table(count_mg,file.path(res_dir,paste0(samID,"_countProc.txt")),
+              sep="\t",row.names = FALSE,quote = FALSE)}
+#
+bplapply(count_file,countProc,res_dir="path to the result directory",site=site_tab)
+#
+# Gathering the total depth for each sample into a data frame
+count_matrix <- site_tab
+dep_file <- dir("path to the result directory",pattern="_countProc.txt",full.names = TRUE)
+for(k in 1:length(dep_file)){
+  dep_mat <- read.delim(dep_file[k],stringsAsFactors = FALSE)
+  count_matrix <- merge(count_matrix,dep_mat,by='variant')}
+names(count_matrix) <- gsub("\\.","-",names(count_matrix))
+write.table(count_matrix,file="path to the file containing total depth of each position for each sample",
+            sep="\t",quote=FALSE,row.names = FALSE)
+```
+
+## Extract alleleic counts (AC) and alleleic frequency (AF) for each sample
+* Input
+  + The merged vcf file with variant annotation by annovar
+  + The data frame containing total depth for variants in each sample
+* Processing: Extract total depth (DP), alleleic counts (AC), ad alleleic frequency (AF) for each sample
+* Output: a list of integrated matrix containing DP/AC/AF of each variant in each sample, respectively
+```{r ext_AC_AF,include=TRUE,eval=FALSE}
+# Load variant into R
+library(VariantAnnotation)
+library(BSgenome.Hsapiens.UCSC.hg19)
+library(GenomicFeatures)
+vcf <- readVcf("path to the merged and annotated vcf file","hg19")
+rd <- rowRanges(vcf)
+#
+# Load matrix of total depth (DP) of each variant in each sample
+count_matrix <- read.delim("path to the file containing total depth of each position for each sample",
+                           sep="\t",stringsAsFactors = FALSE)
+matDP <- count_matrix
+#
+# Extract alleleic count (AC) of each variant in each sample
+matAC <- lapply(geno(vcf)$AD,`[[`,2)
+rownames(matAC) <- seqnames(rd)
+#
+# Extract alleleic frequency (AF) of each variant in each sample
+matAF<- lapply(geno(vcf)$AF,`[[`,1)
+rownames(matAF) <- seqnames(rd)
+#
+# select the variants shared int DP, AC, and AF
+matDP <- matDP[rownames(matDP) %in% rownames(matAF),]
+matAC <- matAC[rownames(matAC) %in% rownames(matDP),]
+matAF <- matAC[rownames(matAF) %in% rownames(matDP),]
+save(matDP,matAC,matAF,file="path to variant RData")
+
+```
+
+## Sessions
+```{r session,include=TRUE,eval=TRUE}
+sessionInfo()
+```
+
+Bioinformatics Resource Center, The Rockefeller University
