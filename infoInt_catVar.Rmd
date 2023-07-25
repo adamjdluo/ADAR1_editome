@@ -1,0 +1,17 @@
+---
+title: "Integrate information and categorize variants"
+author: "JD Luo"
+date: "2023-07-25, reviseed"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Sessions
+```{r session,include=TRUE,eval=FALSE}
+sessionInfo()
+```
+
+Bioinformatics Resource Center, The Rockefeller University
