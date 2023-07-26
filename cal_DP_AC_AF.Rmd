@@ -1,6 +1,8 @@
 ---
 title: "Extract_depth_alleleicCount_and_alleleicFrequency"
-author: "JD Luo"
+author: "Ji-Dung Luo"
+created: "2019-08-12"
+revised: "2023-07-25"
 date: "2023-07-25, revised"
 output: html_document
 ---

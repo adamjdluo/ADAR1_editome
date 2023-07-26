@@ -12,7 +12,7 @@
 <meta name="author" content="Ji-Dung Luo" />
 
 
-<title>Alignment and Variant Calling</title>
+<title>Integrate information and categorize variants</title>
 
 <script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
 // be compatible with the behavior of Pandoc < 2.8).
@@ -349,333 +349,297 @@ display: none;
 
 
 
-<h1 class="title toc-ignore">Alignment and Variant Calling</h1>
+<h1 class="title toc-ignore">Integrate information and categorize
+variants</h1>
 <h4 class="author">Ji-Dung Luo</h4>
-<h4 class="date">2023-07-20, updated</h4>
+<h4 class="date">2023-07-25, revised</h4>
 
 </div>
 
 
-<div id="description" class="section level2">
-<h2>Description</h2>
-<p>This script is revised from RNAseq short variant discovery (<a href="https://gatk.broadinstitute.org/hc/en-us/articles/360035531192-RNAseq-short-variant-discovery-SNPs-Indels-">link</a>)
-of GATK Best Practices Workflows.</p>
+<div id="set-criteria" class="section level2">
+<h2>Set criteria</h2>
 <ul>
-<li>Software
+<li>Select the variants with
 <ul>
-<li>STAR aligner (ver 2.5.4b)</li>
-<li>Picard (ver 2.18.1)</li>
-<li>GATK (ver 4.0.8)</li>
-<li>bcftools (ver 1.9)</li>
+<li>total depth &gt;= 5</li>
+<li>counts of minor allele &gt;= 2</li>
+<li>identified in at least three samples</li>
 </ul></li>
-<li>Genomic Resources
+<li>Input files
 <ul>
-<li>Reference genome sequences (fa): BSGenome.Hsapiens.UCSC.hg19.fa</li>
-<li>Annotation table (gtf): TxDb.Hsapiens.UCSC.hg19.knownGene.gtf</li>
+<li><em>hg19_UCSC_Alu_env.RData</em>: The Alu elements of hg19 in GRange
+object. (can be found in this GitHub repository)</li>
+<li>The RData containing matrix of DP/AC/AF, generated in previous
+step.</li>
 </ul></li>
 </ul>
-</div>
-<div id="make-indexed-genome-for-star" class="section level2">
-<h2>Make indexed genome for STAR</h2>
-<ul>
-<li><em>–runThreadN</em> is applied to define the threads we used (e.g.g
-10 in this study).</li>
-<li><em>–sjdbOverhang</em> is depend on the read length you used. In
-this study, we used 149 bp (150 - 1) while read length is 150 bp.</li>
-</ul>
-<pre class="bash"><code>star=path_to_STAR
-ref=path_to_reference_fasta
-gtf=path_to_gtf_file
-res_dir=path_to_the_result_folder
-
-$star --runThreadN 10 --runMode genomeGenerate --genomeDir $res_dir --genomeFastaFile $ref --sjdbGTFfile $gtf --sjdbOverhang 149</code></pre>
-</div>
-<div id="make-sample-sheet" class="section level2">
-<h2>Make sample sheet</h2>
-<p>Make a sample sheet including - GenomicsID: unique sample ID -
-FQLocation: path to the fastq files for each sample in a format
-<em>fq1;fq2</em> - Group: different types of ADAR - IFN: with/without
-interferon treatment - Unused columns in the sample sheet: InputToUse,
-toMerge, and BroadCall</p>
-<pre class="r"><code>sample_sheet &lt;- data.frame(GenomicsID=c(&quot;sample_1&quot;,&quot;sample_2&quot;),
-                           FQLocation=c(&quot;fq1:fq2 of smaple_1&quot;,&quot;fq1:fq2 of sample_2&quot;),
-                           Group=c(&quot;control&quot;,&quot;control&quot;),
-                           IFN=c(&quot;without&quot;,&quot;without&quot;),
-                           InputToUse=NA,toMerge=NA,BroadCall=NA,
-                           stringsAsFactors = FALSE)
-write.table(sample_sheet, file = &quot;path to the sample sheet in csv format&quot;,
-            sep=&quot;,&quot;,quote = FALSE,row.names = FALSE)</code></pre>
-</div>
-<div id="set-environment-for-parallel-processing-in-r" class="section level2">
-<h2>Set environment for parallel processing in R</h2>
-<ul>
-<li>Parallel processing in R was performed with BiocParallel.</li>
-<li>Before processing, please revise the template file
-(e.g. bt-simple.tmpl) to fit your environment.
-<ul>
-<li>assign <em>node names on line 31</em></li>
-<li>assign <em>RScript path on line 49</em></li>
-</ul></li>
-<li>If parallel processing is not available, you can use
-<em>register(SerialParam())</em>.</li>
-</ul>
-<pre class="r"><code>temp_file1 &lt;- &quot;path to the template file&quot;
+<pre class="r"><code># Set cut-off
+dep_cut &lt;- 5 # total depth &gt;=5
+ac_cut &lt;- 2 # alleleic counts &gt;= 2
+num_cut &lt;- 3 # Identified in at least 3 samples
 #
-library(BiocParallel)
-library(batchtools)
-param &lt;- BatchtoolsParam(workers=10000, cluster=&quot;slurm&quot;,template=temp_file1)
-#
-message(&quot;while using parallel processing&quot;)
-register(param)
-#
-message(&quot;if parallel processing is not available&quot;)
-register(SerialParam())</code></pre>
+load(&quot;hg19_UCSC_Alu_env.RData&quot;) # Alu fragments in hg19, with GRange format
+load(&quot;Path to varints RData&quot;)</code></pre>
 </div>
-<div id="two-step-alignment-with-star" class="section level2">
-<h2>Two-step alignment with STAR</h2>
+<div id="extract-information-of-variant-annotation" class="section level2">
+<h2>Extract information of variant annotation</h2>
+<pre class="r"><code>base_dir &lt;- &quot;path to the main directory&quot;
+res_dir &lt;- &quot;path to the result directory&quot;
+dir.create(res_dir)
+#
+annoTXT &lt;- file.path(base_dir,&quot;annoTab.txt&quot;)
+annoTab &lt;- read.table(annoTXT,header = FALSE,sep=&quot;\t&quot;,stringsAsFactors = FALSE)
+names(annoTab) &lt;- c(&quot;variant&quot;,&quot;geneSymbol&quot;,&quot;SNP138&quot;,&quot;geneFunc&quot;,&quot;exonFunc&quot;,&quot;AAChange&quot;,&quot;Description&quot;)
+annoTab &lt;- dplyr::select(annoTab,variant,geneSymbol,SNP138,geneFunc,exonFunc,AAChange,Description)
+annoTab$geneFunc[grepl(annoTab$geneFunc,pattern = &quot;ncRNA&quot;)] &lt;- &quot;ncRNA&quot;
+annoTab$geneFunc[grepl(annoTab$geneFunc,pattern = &quot;downstream&quot;)|
+                   grepl(annoTab$geneFunc,pattern = &quot;upstream&quot;)] &lt;- &quot;intergenic&quot;
+annoTab$geneFunc[grepl(annoTab$geneFunc,pattern = &quot;UTR5;UTR3&quot;)] &lt;- &quot;UTR3&quot;
+annoTab$geneFunc[grepl(annoTab$geneFunc,pattern = &quot;exonic;splicing&quot;)] &lt;- &quot;exonic&quot;
+annoTab$geneFunc[grepl(annoTab$geneFunc,pattern = &quot;exonic&quot;)] &lt;- &quot;CDS&quot;</code></pre>
+</div>
+<div id="integrate-dpacaf-matrix-with-annotation-table" class="section level2">
+<h2>Integrate DP/AC/AF matrix with annotation table</h2>
+<pre class="r"><code># depth of each sample
+varDP &lt;- data.frame(variant=rownames(matDP))
+varDP &lt;- cbind(varDP,matDP)
+names(varDP) &lt;- c(&quot;variant&quot;,paste0(&quot;DP_&quot;,names(varDP)[-1]))
+varDP$variant &lt;- as.vector(varDP$variant)
+#
+# alleleic frequency (AF) for each sample
+varAF &lt;- data.frame(variant=rownames(matAF))
+varAF &lt;- cbind(varAF,matAF)
+names(varAF) &lt;- c(&quot;variant&quot;,paste0(&quot;AF_&quot;,names(varAF)[-1]))
+varAF$variant &lt;- as.vector(varAF$variant)
+#
+# alleleic counts (AC) for each samplle
+varAC &lt;- data.frame(variant=rownames(matAC))
+varAC &lt;- cbind(varAC,matAC)
+names(varAC) &lt;- c(&quot;variant&quot;,paste0(&quot;AC_&quot;,names(varAC)[-1]))
+varAC$variant &lt;- as.vector(varAC$variant)
+#
+# Merge DP, AF, and AC into single table
+bigTab &lt;- merge(varDP,varAF,id=&#39;variant&#39;)
+bigTab &lt;- merge(bigTab,varAC,id=&#39;variant&#39;)</code></pre>
+</div>
+<div id="additional-information" class="section level2">
+<h2>Additional information</h2>
 <ul>
-<li>Input
+<li>Add information
 <ul>
-<li>pair-end fastq files assigned in sample sheet</li>
-<li>STAR indexed genome</li>
-<li>reference genome in fasta format</li>
+<li>var_inAlu: the variant inside alu element</li>
+<li>chr: chromosome of a given variant</li>
+<li>posi: chromosome position of a given variant</li>
+<li>ntCh: nucleotide changes of a given variant</li>
 </ul></li>
-<li>Processing
-<ul>
-<li>two steps alignment with STAR</li>
-<li>mark duplicates with Picard</li>
-</ul></li>
-<li>Output: bam files with duplicates marked</li>
 </ul>
-<pre class="r"><code>## two-step alignment function
-star_align &lt;- function(x,smSheet=NULL,res_fold=NULL,ref_dir=NULL,ref_fa=NULL,star=NULL,picard=picard_path,nTh=th){
-  sample_id &lt;- smSheet$GenomicsID[x]
-  FQ1 &lt;- paste(strsplit(unlist(strsplit(smSheet$FQLocation[x],split=&quot;;&quot;)),
-                        split=&quot;:&quot;)[[1]],collapse=&quot;,&quot;)
-  FQ2 &lt;- paste(strsplit(unlist(strsplit(smSheet$FQLocation[x],split=&quot;;&quot;)),
-                        split=&quot;:&quot;)[[2]],collapse=&quot;,&quot;)
+<pre class="r"><code>rd_vcf_Alu &lt;- rd[unique(queryHits(GenomicRanges::findOverlaps(rd,rd_Alu)))] # list of Alu elements
+var_inAlu &lt;- names(rd_vcf_Alu)
+bigTab$inAlu &lt;- as.integer(bigTab$variant %in% var_inAlu) # decide the given variants in Alu elements or not
+bigTab$chr &lt;- gsub(&quot;(.*):(.*)_(.*)&quot;,&quot;\\1&quot;,bigTab$variant) # extract chromosome
+bigTab$position &lt;- gsub(&quot;(.*):(.*)_(.*)&quot;,&quot;\\2&quot;,bigTab$variant) # extract position
+bigTab$ntCh &lt;- gsub(&quot;(.*):(.*)_(.*)&quot;,&quot;\\3&quot;,bigTab$variant) # nucleotide changes</code></pre>
+</div>
+<div id="separate-samples-withwithout-interferon-treatment" class="section level2">
+<h2>Separate samples with/without interferon treatment</h2>
+<ul>
+<li>Separate samples with/without IFN treatment</li>
+<li>Merge with annotation</li>
+</ul>
+<pre class="r"><code># select the samples without IFN
+bigTab_ori &lt;- bigTab[,c(names(bigTab)[!grepl(names(bigTab),pattern = &quot;-2&quot;)])] # remove IFN samples
+bigTab_ori &lt;- merge(bigTab_ori,annoTab,id=&#39;variant&#39;,all.x=TRUE)
+#
+# retend IFN sample only
+bigTab_IFN &lt;- bigTab[,c(&#39;variant&#39;,names(bigTab)[grepl(names(bigTab),pattern = &quot;-2&quot;)],&#39;inAlu&#39;,&#39;ntCh&#39;)] 
+bigTab_IFN &lt;- merge(bigTab_IFN,annoTab,id=&#39;variant&#39;,all.x=TRUE)</code></pre>
+</div>
+<div id="identify-and-grouping-candidates-for-samples-without-ifn-treatment" class="section level2">
+<h2>Identify and grouping candidates for samples without IFN
+treatment</h2>
+<ul>
+<li>Select variants pass the cut-off defined in the beginning.</li>
+<li>Select the variants with AF &gt;= AF_mean + 2 * AF_SD</li>
+<li>Grouping variants by the pattern of samples they were
+identified.</li>
+<li>Labeling variants with A/G or T/C and inside Alu elements</li>
+<li>Labeling the variants not in dbSNP</li>
+<li>Save results in a xlsx file</li>
+</ul>
+<pre class="r"><code>## Evaluate the DP/AC/ps passed the cut-off
+tab_pf &lt;- bigTab_ori
+tab_pf$dpCut_C &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_C&quot;)]]&gt;=dp_cut)
+tab_pf$dpCut_F &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_F&quot;)]]&gt;=dp_cut)
+tab_pf$dpCut_X &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_X&quot;)]]&gt;=dp_cut)
+tab_pf$dpCut_Z &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_Z&quot;)]]&gt;=dp_cut)
+#
+tab_pf$acCut_C &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_C&quot;)]]&gt;=ac_cut)
+tab_pf$acCut_F &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_F&quot;)]]&gt;=ac_cut)
+tab_pf$acCut_X &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_X&quot;)]]&gt;=ac_cut)
+tab_pf$acCut_Z &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_Z&quot;)]]&gt;=ac_cut)
+#
+tab_pf$psCut_C &lt;- as.integer(tab_pf$dpCut_C==3&amp;tab_pf$acCut_C==num_cut)
+tab_pf$psCut_F &lt;- as.integer(tab_pf$dpCut_F==3&amp;tab_pf$acCut_F==num_cut)
+tab_pf$psCut_X &lt;- as.integer(tab_pf$dpCut_X==3&amp;tab_pf$acCut_X&gt;=1) # either one pass the
+tab_pf$psCut_Z &lt;- as.integer(tab_pf$dpCut_Z==3&amp;tab_pf$acCut_Z==num_cut)
+#
+tab_pf$psCut_CX &lt;- as.integer(tab_pf$psCut_C==1&amp;tab_pf$psCut_X==0)
+tab_pf$psCut_FX &lt;- as.integer(tab_pf$psCut_F==1&amp;tab_pf$psCut_X==0)
+tab_pf$psCut_ZX &lt;- as.integer(tab_pf$psCut_Z==1&amp;tab_pf$psCut_X==0)
+#
+tab_filt_ct &lt;- tab_pf[tab_pf$psCut_CX==1|tab_pf$psCut_FX==1|tab_pf$psCut_ZX==1,]
+#
+# filter by AF changes, mean + 2 * SD
+cL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_C&quot;)]
+fL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_F&quot;)]
+xL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_X&quot;)]
+zL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_Z&quot;)]
+#
+for(k in 1:length(tab_filt_ct$variant)){
+  cnum &lt;- unlist(tab_filt_ct[k,cL])
+  fnum &lt;- unlist(tab_filt_ct[k,fL])
+  xnum &lt;- unlist(tab_filt_ct[k,xL])
+  znum &lt;- unlist(tab_filt_ct[k,zL])
   #
-  res_dir_1ps &lt;- file.path(res_fold,paste0(&quot;STAR_&quot;,sample_id,&quot;_1ps&quot;))
-  res_dir_geno &lt;- file.path(res_dir_1ps,paste0(&quot;STAR_&quot;,sample_id,&quot;_geno&quot;))
-  res_dir_2ps &lt;- file.path(res_dir_1ps,paste0(&quot;STAR_&quot;,sample_id,&quot;_2ps&quot;))
-  dir.create(res_dir_1ps)
-  dir.create(res_dir_geno)
-  dir.create(res_dir_2ps)
+  if(sum(xnum)==0){cutX &lt;- 0}else{cutX&lt;-mean(xnum)+2*sd(xnum)}
   #
-  setwd(res_dir_1ps)
-  system(paste(satr,&quot;--genomeDir&quot;,ref_dir,
-               &quot;--readFilesCommand zcat&quot;,
-               &quot;--readFilesIn&quot;,FQ1,FQ2,
-               &quot;--runThreadN&quot;,nTh,sep=&quot; &quot;)) # 1st-step align
-  system(paste(star,&quot;--runMode genomeGenerate&quot;,
-               &quot;--genomeDir&quot;,res_dir_geno,
-               &quot;--genomeFastaFiles&quot;,ref_fa,
-               &quot;--sjdbFileChrStartEnd SJ.out.tab&quot;,
-               &quot;--sjdbOverhang 149&quot;,
-               &quot;--runThreadN&quot;,nTh,sep = &quot; &quot;))
-  setwd(res_dir_2ps)
-  system(paste(&quot;STAR --genomeDir&quot;,res_dir_geno,&quot;--readFilesCommand zcat&quot;,
-               &quot;--readFilesIn&quot;,FQ1,FQ2,
-               &quot;--runThreadN&quot;,nTh,sep=&quot; &quot;))
-  #
-  setwd(res_fold)
-  grp &lt;- smSheet$Group[x]
-  in_sam &lt;- file.path(res_fold,paste0(&quot;STAR_&quot;,sample_id,&quot;_1ps&quot;),
-                      paste0(&quot;STAR_&quot;,sample_id,&quot;_2ps&quot;),&quot;Aligned.out.sam&quot;)
-  sort_bam &lt;- file.path(res_fold,paste0(sample_id,&quot;_sortted.bam&quot;))
-  rmDup_bam &lt;- file.path(res_fold,paste0(sample_id,&quot;_rmDup.bam&quot;))
-  rmDup_met &lt;- file.path(res_fold,paste0(sample_id,&quot;_rmDup_metrics.txt&quot;))
-  system(paste(picard,&quot;AddOrReplaceReadGroups I=&quot;,in_sam,&quot;O=&quot;,sort_bam,
-               &quot;SO=coordinate RGID=&quot;,sample_id,
-               &quot;RGLB=RNASeq&quot;,&quot;RGPL=Illumina&quot;,&quot;RGPU=NovaSeq&quot;,&quot;RGSM=&quot;,sample_id,sep=&quot; &quot;))
-  system(paste(picard,&quot;MarkDuplicates&quot;,&quot;I=&quot;,sort_bam,&quot;O=&quot;,rmDup_bam,
-               &quot;CREATE_INDEX=TRUE&quot;,&quot;VALIDATION_STRINGENCY=SILENT M=&quot;,rmDup_met,sep=&quot; &quot;))
-  #
-  unlink(file.path(res_fold,paste0(&quot;STAR_&quot;,sample_id,&quot;_1ps&quot;)),recursive = TRUE)}
-##
-## Process
-base_dir &lt;- &quot;path to the main directory&quot;
-align_res &lt;- file.path(base_dir,&quot;align_results&quot;)
-dir.create(align_res)
-bplapply(1:length(sample_sheet$GenomicsID),star_align,
-         smSheet=sample_sheet,
-         res_fold=align_res,
-         ref_dir=&quot;path to STAR indexed genome&quot;,
-         ref_fa=&quot;path to reference genome&quot;,
-         star=&quot;path to STAR&quot;,
-         picard=&quot;path to Picard&quot;,
-         nTh=&quot;number of threads&quot;)
-##
-## END</code></pre>
-</div>
-<div id="splitncigar" class="section level2">
-<h2>SplitNCigar</h2>
-<ul>
-<li>Input: bam files after remove duplicates</li>
-<li>Process: SplitNCigarReads in GATK</li>
-<li>Output: split_NCigar bam files</li>
-</ul>
-<pre class="r"><code>message(&quot;function&quot;)
-split_NCigar &lt;- function(rmDup_bam,gatk=NULL,res_fold=NULL,ref_fa=NULL){
-  sample_id &lt;- gsub(&quot;_rmDup.bam$&quot;,&quot;&quot;,basename(rmDup_bam))
-  splNC_bam &lt;- file.path(res_fold,paste0(sample_id,&quot;_splitNC.bam&quot;))
-  system(paste(gatk,&quot;SplitNCigarReads&quot;,&quot;-R&quot;,ref_fa,&quot;-I&quot;,rmDup_bam,&quot;-O&quot;,splNC_bam,sep=&quot; &quot;))}
+  tab_filt_ct$sigCX[k] &lt;- as.integer(sum(as.integer(cnum&gt;cutX))==3)
+  tab_filt_ct$sigFX[k] &lt;- as.integer(sum(as.integer(fnum&gt;cutX))==3)
+  tab_filt_ct$sigZX[k] &lt;- as.integer(sum(as.integer(znum&gt;cutX))==3)}
 #
-message(&quot;processing&quot;)
-rmDup_bam &lt;- dir(file.path(base_dir,&quot;align_results&quot;),pattern=&quot;_rmDup.bam$&quot;,full.names = TRUE)
-bplapply(rmDup_bam,split_NCigar,
-         gatk=&quot;path to GATK&quot;,
-         res_fold=file.path(base_dir,&quot;align_results&quot;),
-         ref_fa=&quot;reference genoem fa&quot;)</code></pre>
+# grouping variants
+tab_filt_ct_AF &lt;- tab_filt_ct[tab_filt_ct$sigCX==1|tab_filt_ct$sigFX==1|tab_filt_ct$sigZX==1,]
+#
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 2
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 2
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 2
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 3
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 3
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 3
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 4
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 5
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 6
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 7
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 8
+#
+tab_filt_ct_AF_inAlu &lt;- rbind(tab_filt_ct_AF[tab_filt_ct_AF$inAlu==1&amp;tab_filt_ct_AF$ntCh==&quot;A/G&quot;,], # select A/G mutations and the position in Alu element
+                              tab_filt_ct_AF[tab_filt_ct_AF$inAlu==1&amp;tab_filt_ct_AF$ntCh==&quot;T/C&quot;,]) # select T/C mutations and the position in Alu element
+tab_filt_ct_AF_inAlu &lt;- tab_filt_ct_AF_inAlu[!grepl(tab_filt_ct_AF_inAlu$SNP138,pattern = &#39;rs&#39;),] #select variants not in SNP138 database
+#
+# Save results into xlsx file
+rio::export(list(&quot;filtByCount&quot;=tab_filt_ct,&quot;filtByAF&quot;=tab_filt_ct_AF,&quot;inAlu&quot;=tab_filt_ct_AF_inAlu),
+            file = file.path(res_dir,&quot;var_cand_nIFN.xlsx&quot;))</code></pre>
 </div>
-<div id="base-recalibration-with-gatk" class="section level2">
-<h2>Base recalibration with GATK</h2>
+<div id="identify-and-grouping-candidates-for-samples-with-ifn-treatment" class="section level2">
+<h2>Identify and grouping candidates for samples with IFN treatment</h2>
 <ul>
-<li>Input:
-<ul>
-<li>split_NCigar bam files</li>
-<li>refernece genome in fasta format</li>
-<li>known sites of dbSNP in vcf format</li>
-</ul></li>
-<li>Processing: BaseRecalibrator and ApplyBQSR in GATK</li>
-<li>Output: recalibrated bam files</li>
+<li>Select variants pass the cut-off defined in the beginning.</li>
+<li>Select the variants with AF &gt;= AF_mean + 2 * AF_SD</li>
+<li>Grouping variants by the pattern of samples they were
+identified.</li>
+<li>Labeling variants with A/G or T/C and inside Alu elements</li>
+<li>Labeling the variants not in dbSNP</li>
+<li>Save results in a xlsx file</li>
 </ul>
-<pre class="r"><code># Function
-base_recal &lt;- function(splitNC_bam,ref_fa=NULL,snpDB=NULL,res_fold=NULL,gatk=gatk_path){
-  sample_id &lt;- gsub(&quot;_splitNC.bam&quot;,&quot;&quot;,basename(splitNC_bam))
-  recal_grp &lt;- file.path(res_fold,paste0(sample_id,&quot;_recal.grp&quot;))
-  recal_bam &lt;- file.path(res_fold,paste0(sample_id,&quot;_recal.bam&quot;))
+<pre class="r"><code>## Evaluate the DP/AC/ps passed the cut-off
+tab_pf &lt;- bigTab_IFN
+tab_pf$dpCut_C &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_C&quot;)]]&gt;=dp_cut)
+tab_pf$dpCut_F &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_F&quot;)]]&gt;=dp_cut)
+tab_pf$dpCut_X &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_X&quot;)]]&gt;=dp_cut)
+tab_pf$dpCut_Z &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;DP_Z&quot;)]]&gt;=dp_cut)
+#
+tab_pf$acCut_C &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_C&quot;)]]&gt;=ac_cut)
+tab_pf$acCut_F &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_F&quot;)]]&gt;=ac_cut)
+tab_pf$acCut_X &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_X&quot;)]]&gt;=ac_cut)
+tab_pf$acCut_Z &lt;- rowSums(tab_pf[,names(tab_pf)[grepl(names(tab_pf),pattern = &quot;AC_Z&quot;)]]&gt;=ac_cut)
+#
+tab_pf$psCut_C &lt;- as.integer(tab_pf$dpCut_C==3&amp;tab_pf$acCut_C==3)
+tab_pf$psCut_F &lt;- as.integer(tab_pf$dpCut_F==3&amp;tab_pf$acCut_F==3)
+tab_pf$psCut_X &lt;- as.integer(tab_pf$dpCut_X==3&amp;tab_pf$acCut_X&gt;=1) # either one pass the
+tab_pf$psCut_Z &lt;- as.integer(tab_pf$dpCut_Z==3&amp;tab_pf$acCut_Z==3)
+#
+tab_pf$psCut_CX &lt;- as.integer(tab_pf$psCut_C==1&amp;tab_pf$psCut_X==0)
+tab_pf$psCut_FX &lt;- as.integer(tab_pf$psCut_F==1&amp;tab_pf$psCut_X==0)
+tab_pf$psCut_ZX &lt;- as.integer(tab_pf$psCut_Z==1&amp;tab_pf$psCut_X==0)
+#
+tab_filt_ct &lt;- tab_pf[tab_pf$psCut_CX==1|tab_pf$psCut_FX==1|tab_pf$psCut_ZX==1,]
+#
+# filter by AF changes
+cL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_C&quot;)]
+fL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_F&quot;)]
+xL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_X&quot;)]
+zL &lt;- names(tab_filt_ct)[grepl(names(tab_filt_ct),pattern = &quot;AF_Z&quot;)]
+#
+for(k in 1:length(tab_filt_ct$variant)){
+  cnum &lt;- unlist(tab_filt_ct[k,cL])
+  fnum &lt;- unlist(tab_filt_ct[k,fL])
+  xnum &lt;- unlist(tab_filt_ct[k,xL])
+  znum &lt;- unlist(tab_filt_ct[k,zL])
   #
-  system(paste(gatk,&quot;BaseRecalibrator&quot;,
-               &quot;-R&quot;,ref_fa,
-               &quot;-I&quot;,splitNC_bam,
-               &quot;-O&quot;,recal_grp,
-               &quot;--known-sites&quot;,snpDB,sep=&quot; &quot;))
-  system(paste(gatk,&quot;ApplyBQSR&quot;,
-               &quot;-R&quot;,ref_fa,
-               &quot;-I&quot;,splitNC_bam,
-               &quot;-O&quot;,recal_bam,
-               &quot;--bqsr-recal-file&quot;,recal_grp,sep=&quot; &quot;))}
-#
-# Processing
-splitNC_bam &lt;- dir(file.path(base_dir,&quot;align_results&quot;),pattern = &quot;_splitNC.bam&quot;,full.names = TRUE)
-bplapply(splitNC_bam,base_recal,
-         gatk=&quot;path to GATK&quot;,
-         res_fold=file.path(base_dir,&quot;BAM&quot;),
-         ref_fa=&quot;path to reference genome&quot;,
-         snpDB=&quot;path to known dbSNP in vcf format&quot;)</code></pre>
-</div>
-<div id="variant-calling-with-mutect2-of-gatk" class="section level2">
-<h2>Variant calling with Mutect2 of GATK</h2>
-<ul>
-<li>Input
-<ul>
-<li>recalibrated bam files</li>
-<li>reference genome in fasta format</li>
-</ul></li>
-<li>Process
-<ul>
-<li>Variant calling with Mutect2 of GATK</li>
-<li>Select single nucleotide variants with SelectVariants of GATK</li>
-</ul></li>
-<li>Output: single-nucleotide variations in vcf format</li>
-</ul>
-<pre class="r"><code># Function
-var_call &lt;- function(rec_bam,gatk=NULL,ref_fa=NULL,res_fold=NULL){
-  sample_id &lt;- gsub(&quot;_recal.bam&quot;,&quot;&quot;,basename(rec_bam))
-  vcf_file &lt;- file.path(res_fold,paste0(sample_id,&quot;_varCall.vcf.gz&quot;))
-  system(paste(gatk,&quot;Mutect2&quot;,&quot;-R&quot;,ref_fa,
-               &quot;-I&quot;,rec_bam,&quot;-tumor&quot;,sample_id,&quot;-O&quot;,vcf_file,sep=&quot; &quot;))}
-var_filt &lt;- function(vcf_file,res_fold=NULL,gatk=NULL,ref_fa=NULL){
-  sample_id &lt;- gsub(&quot;_varCall.vcf.gz$&quot;,&quot;&quot;,basename(vcf_file))
-  vcf_filt &lt;- file.path(res_fold,&quot;SNV&quot;,paste0(sample_id,&quot;_SNV.vcf.gz&quot;))
+  if(sum(xnum)==0){cutX &lt;- 0}else{cutX&lt;-mean(xnum)+2*sd(xnum)}
   #
-  system(paste(gatk,&quot;SelectVariants&quot;,
-               &quot;-R&quot;,ref_fa,
-               &quot;-V&quot;,vcf_file,
-               &quot;-O&quot;,vcf_filt,
-               &quot;--select-type-to-include&quot;,&quot;SNP&quot;,sep=&quot; &quot;))}
+  tab_filt_ct$sigCX[k] &lt;- as.integer(sum(as.integer(cnum&gt;cutX))==3)
+  tab_filt_ct$sigFX[k] &lt;- as.integer(sum(as.integer(fnum&gt;cutX))==3)
+  tab_filt_ct$sigZX[k] &lt;- as.integer(sum(as.integer(znum&gt;cutX))==3)}
 #
-# Processing
-dir.create(file.path(base_dir,&quot;VCF&quot;))
-dir.create(file.path(base_dir,&quot;SNV&quot;))
-rec_bam &lt;- dir(file.path(base_dir,&quot;BAM&quot;),pattern = &quot;_recal.bam&quot;,full.names = TRUE)
-bplapply(rec_bam,var_call,
-         gatk=&quot;path to GATK&quot;,
-         res_fold=file.path(base_dir,&quot;VCF&quot;),
-         ref_fa=&quot;path to reference genome in fasta format&quot;)
-bplapply(vcf_file,var_filt,
-         res_fold=base_dir,
-         gatk=&quot;path to GATK&quot;,
-         ref_fa=&quot;path to reference genome in fasta format&quot;)</code></pre>
+# grouping variants
+tab_filt_ct_AF &lt;- tab_filt_ct[tab_filt_ct$sigCX==1|tab_filt_ct$sigFX==1|tab_filt_ct$sigZX==1,]
+#
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 1
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 2
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 2
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 2
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 3
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 3
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 3
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 4
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 5
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;tab_filt_ct_AF$sigZX==1] &lt;- 6
+tab_filt_ct_AF$Grp[tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 7
+tab_filt_ct_AF$Grp[!tab_filt_ct_AF$sigCX==1&amp;!tab_filt_ct_AF$sigFX==1&amp;!tab_filt_ct_AF$sigZX==1] &lt;- 8
+#
+tab_filt_ct_AF_inAlu &lt;- rbind(tab_filt_ct_AF[tab_filt_ct_AF$inAlu==1&amp;tab_filt_ct_AF$ntCh==&quot;A/G&quot;,], # select A/G mutations and the position in Alu element
+                              tab_filt_ct_AF[tab_filt_ct_AF$inAlu==1&amp;tab_filt_ct_AF$ntCh==&quot;T/C&quot;,]) # select T/C mutations and the position in Alu element
+tab_filt_ct_AF_inAlu &lt;- tab_filt_ct_AF_inAlu[!grepl(tab_filt_ct_AF_inAlu$SNP138,pattern = &#39;rs&#39;),] #select variants not in SNP138 database
+#
+rio::export(list(&quot;filtByCount&quot;=tab_filt_ct,&quot;filtByAF&quot;=tab_filt_ct_AF,&quot;inAlu&quot;=tab_filt_ct_AF_inAlu),
+            file = file.path(res_dir,&quot;var_cand_IFN.xlsx&quot;))</code></pre>
 </div>
-<div id="annotation-with-annovar" class="section level2">
-<h2>Annotation with annovar</h2>
+<div id="generate-report-with-the-editted-rmd-file" class="section level2">
+<h2>Generate report with the editted Rmd file</h2>
 <ul>
-<li>Input
-<ul>
-<li>filtered vcf files</li>
-<li>annovar database with particular genome version</li>
-<li>refrence genome in fasta format</li>
-</ul></li>
-<li>Processing
-<ul>
-<li>Merge the filtered variants with merge function of bcftools</li>
-<li>Annotate variants with annovar</li>
-</ul></li>
-<li>Output: annotated variants</li>
+<li>Input: The integrated information in xlsx file for samples
+with/without IFN treatment</li>
+<li>Process with the <em>report_rmd_v2.Rmd</em> file</li>
 </ul>
-<pre class="r"><code># merge filtered VCFs
-vcf_filt &lt;- dir(file.path(base_dir,&quot;SNV&quot;),pattern=&quot;_SNV.vcf.gz$&quot;,full.names=TRUE)
-system(paste(&quot;path to bcftools&quot;,&quot;merge -m snps&quot;,&quot;-o&quot;,file.path(base_dir,&quot;Merged.vcf&quot;),
-             paste(vcf_filt,collapse = &quot; &quot;),sep=&quot; &quot;))
+<pre class="r"><code># Copy the template Rmd file into main directory
+file.copy(file.path(base_dir,&quot;report_rmd_v2.Rmd&quot;),res_dir,recursive = TRUE)
 #
-# annotate variants with annovar
-var_anno &lt;- function(vcf_file,annoV=NULL,gVer=NULL,db=NULL,res_fold=NULL,gatk=NULL,ref=NULL){
-  samID &lt;- gsub(&quot;.vcf.gz$&quot;,&quot;&quot;,basename(vcf_file))
-  system(paste(&quot;perl&quot;,file.path(annoV,&quot;table_annovar.pl&quot;),
-               vcf_file,db,&quot;-buildver&quot;,gVer,&quot;-out&quot;,file.path(res_fold,samID),
-               &quot;-remove&quot;,&quot;-protocol&quot;, &quot;refGene,snp138&quot;, &quot;-operation&quot;,&quot;g,f&quot;,
-               &quot;-nastring&quot;,&quot;.&quot;,&quot;-vcfinput&quot;,sep=&quot; &quot;))
-  system(paste(gatk,&quot;SelectVariants&quot;,&quot;-R&quot;,ref,
-               &quot;-V&quot;,file.path(res_fold,paste0(samID,&quot;.&quot;,gVer,&quot;_multianno.vcf&quot;)),
-               &quot;-O&quot;,file.path(res_fold,paste0(samID,&quot;_anno.vcf.gz&quot;)),
-               sep=&quot; &quot;))}
-dir.create(base_dir,&quot;anno_VCF&quot;)
-bplapply(file.path(base_dir,&quot;Merged.vcf&quot;),var_anno,
-         res_fold=file.path(base_dir,&quot;anno_VCF&quot;),
-         annoV=&quot;path to annovar&quot;,
-         gVer=&quot;genome version, hg19 in this study&quot;,
-         db=&quot;path to annovar db&quot;,
-         gatk=&quot;path to GATK&quot;,
-         ref=&quot;path to reference genome in fasta format&quot;)</code></pre>
+# Load the results of SNPs identified in the samples without IFN treatment
+file_ori &lt;- file.path(res_dir,&quot;var_cand_nIFN.xlsx&quot;)
+#
+# Build report
+rmarkdown::render(file.path(res_dir,&quot;report_rmd_v2.Rmd&quot;),
+                  output_file = file.path(res_dir,&quot;report_fileName_nonIFN.html&quot;))
+#
+# load results of SNPs identified in the samples with IFN treatment
+file_ori &lt;- file.path(res_dir,&quot;var_cand_IFN.xlsx&quot;)
+#
+# Build report
+rmarkdown::render(file.path(res_dir,&quot;report_rmd_v2.Rmd&quot;),
+                  output_file = file.path(res_dir,&quot;report_fileName_IFN.html&quot;))</code></pre>
 </div>
 <div id="sessions" class="section level2">
 <h2>Sessions</h2>
 <pre class="r"><code>sessionInfo()</code></pre>
-<pre><code>## R version 4.3.0 (2023-04-21)
-## Platform: aarch64-apple-darwin20 (64-bit)
-## Running under: macOS Ventura 13.4.1
-## 
-## Matrix products: default
-## BLAS:   /Library/Frameworks/R.framework/Versions/4.3-arm64/Resources/lib/libRblas.0.dylib 
-## LAPACK: /Library/Frameworks/R.framework/Versions/4.3-arm64/Resources/lib/libRlapack.dylib;  LAPACK version 3.11.0
-## 
-## locale:
-## [1] en_US.UTF-8/en_US.UTF-8/en_US.UTF-8/C/en_US.UTF-8/en_US.UTF-8
-## 
-## time zone: America/New_York
-## tzcode source: internal
-## 
-## attached base packages:
-## [1] stats     graphics  grDevices utils     datasets  methods   base     
-## 
-## loaded via a namespace (and not attached):
-##  [1] digest_0.6.31   R6_2.5.1        fastmap_1.1.1   xfun_0.39      
-##  [5] cachem_1.0.8    knitr_1.42      htmltools_0.5.5 rmarkdown_2.21 
-##  [9] cli_3.6.1       sass_0.4.6      jquerylib_0.1.4 compiler_4.3.0 
-## [13] rstudioapi_0.14 tools_4.3.0     evaluate_0.21   bslib_0.4.2    
-## [17] yaml_2.3.7      rlang_1.1.1     jsonlite_1.8.4</code></pre>
 <p>Bioinformatics Resource Center, The Rockefeller University</p>
 </div>
 

@@ -1,6 +1,24 @@
 # ADAR1_editome
-The scripts are applied to the study of ADAR1 editome, published on PNAS[link]().
-- Align_and_varCall.R: follow the step of GATK best practice, variants were annotated with annovar
-- rawCount_AF_AC.R: calculate depth (DP), alleleic fraquency (AF), and alternative alleleic counts (AC) for each variant
-- gather_and_proecss_varInfo.R: integrate information of each variant into single table. filtering and grouping variants
-- report_rmd.Rmd: Make visualized reports
+* This repository recorded original scripts for the data analysis of the article titled **Decoupling expression and editing preferences of ADAR1 p150 and p110 isoforms** (Sun et al, PNAS(2021), 118(12):e2021757118) [link](https://www.pnas.org/doi/abs/10.1073/pnas.2021757118). 
+
+* Essential Resources
+  + *STAR* aligner (ver 2.5.4b)
+  + *Picard* (ver 2.18.1)
+  + Genomic Analysis Toolkit (*GATK*, ver 4.0.8)
+  + *annovar*
+  + *bcftools* (ver 1.9)
+  + *bam-readcount* [link](https://github.com/genome/bam-readcount)
+  + Reference genome sequences (fa): *BSGenome.Hsapiens.UCSC.hg19.fa*
+  + Annotation table (gtf): *TxDb.Hsapiens.UCSC.hg19.knownGene.gtf*
+  + annotation database constructed by annovar
+  + Locations of Alu elements in human genome (hg18): *hg19_UCSC_Alu_env.RData (in this repository)*
+
+* Workflow
+This script is revised from RNAseq short variant discovery ([link](https://gatk.broadinstitute.org/hc/en-us/articles/360035531192-RNAseq-short-variant-discovery-SNPs-Indels-)) of GATK Best Practices Workflows, then followed by identifying and categorizing variations in a customized way. The steps were recorded in the following Rmd files
+
+  + *align_and_variant_call_GATK_BestPrec_Rseq.Rmd*: Alignment, variant calling and annotation by following GATK Best Practice. Variant annotation was donw by annovar.
+  + *cal_DP_AC_AF.Rmd*: calculate the total depth (DP), depth of minor allele (AC), and alleleic frequency (AF) of minor allele. 
+  + *infoInt_catVar.Rmd*: integrate information for variants in each sample, identify candidates, and categorize variants
+  + *report_rmd_v2.Rmd*: make report and visualization
+
+Bioinformatics Resource Center, The Rockefeller University

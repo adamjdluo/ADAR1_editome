@@ -1,7 +1,9 @@
 ---
 title: "Alignment and Variant Calling"
 author: "Ji-Dung Luo"
-date: "2023-07-20, revised"
+created: "2019-08-12"
+revised: "2023-07-20"
+date: "2023-07-20, updated"
 output: html_document
 ---
 
@@ -11,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Description
 This script is revised from RNAseq short variant discovery ([link](https://gatk.broadinstitute.org/hc/en-us/articles/360035531192-RNAseq-short-variant-discovery-SNPs-Indels-)) of GATK Best Practices Workflows.
+
 * Software
   + STAR aligner (ver 2.5.4b)
   + Picard (ver 2.18.1)
