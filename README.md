@@ -5,7 +5,7 @@
   + *STAR* aligner (ver 2.5.4b)
   + *Picard* (ver 2.18.1)
   + Genomic Analysis Toolkit (*GATK*, ver 4.0.8)
-  + *annovar*
+  + *annovar* [link](https://annovar.openbioinformatics.org/en/latest/)
   + *bcftools* (ver 1.9)
   + *bam-readcount* [link](https://github.com/genome/bam-readcount)
   + Reference genome sequences (fa): *BSGenome.Hsapiens.UCSC.hg19.fa*
