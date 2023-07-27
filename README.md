@@ -5,15 +5,16 @@
   + *STAR* aligner (ver 2.5.4b)
   + *Picard* (ver 2.18.1)
   + Genomic Analysis Toolkit (*GATK*, ver 4.0.8)
-  + *annovar* [link](https://annovar.openbioinformatics.org/en/latest/)
+  + *annovar* (ver 2019-10-24 00:05:28 -0400) [link](https://annovar.openbioinformatics.org/en/latest/)
   + *bcftools* (ver 1.9)
-  + *bam-readcount* [link](https://github.com/genome/bam-readcount)
+  + *bam-readcount* (0.8.0-unstable-6-963acab-dirty) [link](https://github.com/genome/bam-readcount)
   + Reference genome sequences (fa): *BSGenome.Hsapiens.UCSC.hg19.fa*
   + Annotation table (gtf): *TxDb.Hsapiens.UCSC.hg19.knownGene.gtf*
-  + annotation database constructed by annovar
-  + Locations of Alu elements in human genome (hg18): *hg19_UCSC_Alu_env.RData (in this repository)*
+  + annotation database constructed by annovar [link to the instruction](https://annovar.openbioinformatics.org/en/latest/user-guide/download/)
+  + Locations of Alu elements in human genome (hg19): *hg19_UCSC_Alu_env.RData (in this repository)*
 
 * Workflow
+
 This script is revised from RNAseq short variant discovery ([link](https://gatk.broadinstitute.org/hc/en-us/articles/360035531192-RNAseq-short-variant-discovery-SNPs-Indels-)) of GATK Best Practices Workflows, then followed by identifying and categorizing variations in a customized way. The steps were recorded in the following Rmd files
 
   + *align_and_variant_call_GATK_BestPrec_Rseq.Rmd*: Alignment, variant calling and annotation by following GATK Best Practice. Variant annotation was donw by annovar.
