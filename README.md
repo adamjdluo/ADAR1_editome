@@ -13,11 +13,8 @@
   + annotation database constructed by annovar [link to the instruction](https://annovar.openbioinformatics.org/en/latest/user-guide/download/)
   + Locations of Alu elements in human genome (hg19): *hg19_UCSC_Alu_env.RData (in this repository)*
 
-* Workflow
-
-This script is revised from RNAseq short variant discovery ([link](https://gatk.broadinstitute.org/hc/en-us/articles/360035531192-RNAseq-short-variant-discovery-SNPs-Indels-)) of GATK Best Practices Workflows, then followed by identifying and categorizing variations in a customized way. The steps were recorded in the following Rmd files
-
-  + *align_and_variant_call_GATK_BestPrec_Rseq.Rmd*: Alignment, variant calling and annotation by following GATK Best Practice. Variant annotation was donw by annovar.
+* This workflow includes variant calling by using RNAseq short variant discovery ([link](https://gatk.broadinstitute.org/hc/en-us/articles/360035531192-RNAseq-short-variant-discovery-SNPs-Indels-)) of GATK Best Practices Workflows, then followed by identifying and categorizing ADAR-targeted variants in a customized way. The steps were recorded in the following Rmd files
+  + *align_and_variant_call_GATK_BestPrec_Rseq.Rmd*: Alignment, variant calling and annotation by following GATK Best Practice. Variant annotation was done by annovar.
   + *cal_DP_AC_AF.Rmd*: calculate the total depth (DP), depth of minor allele (AC), and alleleic frequency (AF) of minor allele. 
   + *infoInt_catVar.Rmd*: integrate information for variants in each sample, identify candidates, and categorize variants
   + *report_rmd_v2.Rmd*: make report and visualization
